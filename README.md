@@ -15,19 +15,23 @@
 - [Streamlit](https://streamlit.io) — 웹 UI
 - [Groq API](https://console.groq.com) — AI 피드백 (llama-3.3-70b-versatile)
 
-## 설치 방법
+## 새 PC에서 처음 세팅하는 방법
 
 ```bash
-pip install streamlit groq
+# 1. 저장소 클론
+git clone https://github.com/minwook1189-lab/english-practice.git
+cd english-practice
+
+# 2. 가상환경 생성 및 패키지 설치
+python -m venv .venv
+.venv/Scripts/pip install streamlit groq
+
+# 3. 실행 파일 생성
+#    영어연습_실행.bat.example 을 복사해서 영어연습_실행.bat 으로 저장
+#    파일 열어서 "여기에_API_키_입력" 부분에 Groq API 키 입력
 ```
 
-## 환경변수 설정
-
-[Groq Console](https://console.groq.com)에서 무료 API 키 발급 후 `영어연습_실행.bat` 파일에 설정:
-
-```
-set GROQ_API_KEY=your_api_key_here
-```
+[Groq Console](https://console.groq.com)에서 무료 API 키 발급 가능
 
 ## 실행 방법
 
