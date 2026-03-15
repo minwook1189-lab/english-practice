@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """
 영어 작문 연습 — Streamlit 웹 앱
-pip install google-genai streamlit
-환경변수: GEMINI_API_KEY
+pip install groq streamlit
+환경변수: GROQ_API_KEY  (https://console.groq.com 에서 무료 발급)
 """
 
 import streamlit as st
-from google import genai
+from groq import Groq
 import os
+import json
+from datetime import date
 
-MODEL = "gemini-2.5-flash"
+MODEL = "llama-3.3-70b-versatile"
+HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.json")
 
-SENTENCE_PROMPT = """영어 작문 연습용 한국어 문장 10개를 만들어주세요.
+SENTENCE_PROMPT = """영어 작문 연습용 한국어 문장 1개를 만들어주세요.
 
 학습자: 한국외대 독일어교육과 졸업, 독해 영어 능숙, C1 수준 목표
 
@@ -19,7 +22,7 @@ SENTENCE_PROMPT = """영어 작문 연습용 한국어 문장 10개를 만들어
 - 단순 직역이 안 되는 문장 (영어 특유의 표현/구조 필요)
 - 관용 표현, 수동태, 복잡한 시제 포함
 - 비즈니스/시사/일상 골고루
-- 번호와 문장만 출력 (설명 없이)
+- 문장만 출력 (번호, 설명 없이)
 """
 
 FEEDBACK_PROMPT = """영어 작문 강사로서 아래 번역을 평가해주세요.
@@ -33,37 +36,78 @@ FEEDBACK_PROMPT = """영어 작문 강사로서 아래 번역을 평가해주세
 ✅ 정확함 / 🔶 개선 가능 / ❌ 오류 있음 중 하나만 선택
 
 [모범 번역]
-자연스러운 영어 1가지만
+자연스러운 영어 3가지 버전을 번호와 함께 제시:
+1. (가장 일반적이고 자연스러운 버전)
+2. (다른 구조나 표현을 사용한 버전)
+3. (좀 더 격식있거나 고급 표현을 사용한 버전)
 
 [핵심 수정]
-- 틀리거나 어색한 부분만 1~3개, 한 줄씩 간결하게
+학습자 번역에서 틀리거나 어색한 부분을 상세히 분석:
+- 각 오류마다: 문제가 된 표현 → 올바른 표현 (왜 틀렸는지, 어떤 영어 규칙/관용법인지 구체적으로 설명)
+오류가 없으면 "큰 오류 없음, 아래 개선 포인트 참고" 라고 쓰고 더 자연스럽게 만들 수 있는 부분 설명
+
+[학습 포인트]
+이 문장에서 핵심적으로 배워야 할 영어 표현이나 문법 포인트 1~2개를 구체적으로 설명
+(예: 특정 동사의 용법, 영어에서 자주 쓰이는 구조, 한국어와 다른 사고방식 등)
 
 [어려운 단어]
 모범 번역에 쓰인 어려운 단어/표현 2~3개:
 단어 | 뜻 | 짧은 예문
 
-불필요한 인사말, 칭찬, 긴 설명 금지."""
+불필요한 인사말, 칭찬 금지."""
 
 
+# ── 기록 파일 관련 ────────────────────────────────────────
+def load_all_history() -> list:
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+
+def append_items_to_file(new_items: list, session_date: str):
+    """새 항목만 파일에 추가 (같은 날짜면 이어붙임, 덮어쓰지 않음)"""
+    if not new_items:
+        return
+    all_history = load_all_history()
+    savable = [history_item_to_savable(i) for i in new_items]
+    for entry in all_history:
+        if entry["date"] == session_date:
+            entry["items"].extend(savable)
+            break
+    else:
+        all_history.append({"date": session_date, "items": savable})
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(all_history, f, ensure_ascii=False, indent=2)
+
+
+def flush_history_to_file():
+    """아직 저장되지 않은 항목만 파일에 추가"""
+    saved_count = st.session_state.get("saved_count", 0)
+    new_items = st.session_state.history[saved_count:]
+    if new_items:
+        append_items_to_file(new_items, st.session_state.session_date)
+        st.session_state.saved_count = len(st.session_state.history)
+
+# ── API 관련 ──────────────────────────────────────────────
 def get_client():
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        st.error("❌ GEMINI_API_KEY 환경변수가 없습니다. https://aistudio.google.com/apikey 에서 발급받으세요.")
+        st.error("❌ GROQ_API_KEY 환경변수가 없습니다. https://console.groq.com 에서 무료로 발급받으세요.")
         st.stop()
-    return genai.Client(api_key=api_key)
+    return Groq(api_key=api_key)
 
 
-def generate_sentences(client) -> list[str]:
-    response = client.models.generate_content(model=MODEL, contents=SENTENCE_PROMPT)
-    sentences = []
-    for line in response.text.strip().split("\n"):
-        line = line.strip()
-        if line and line[0].isdigit() and "." in line:
-            parts = line.split(".", 1)
-            if len(parts) == 2:
-                sentences.append(parts[1].strip())
-    return sentences[:10]
-
+def generate_one_sentence(client) -> str:
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=[{"role": "user", "content": SENTENCE_PROMPT}],
+        temperature=0.9,
+    )
+    return response.choices[0].message.content.strip()
 
 def parse_feedback(text: str) -> dict:
     sections = {}
@@ -85,8 +129,21 @@ def parse_feedback(text: str) -> dict:
 
 def get_feedback(client, korean: str, user_answer: str) -> dict:
     prompt = FEEDBACK_PROMPT.format(korean=korean, user_answer=user_answer)
-    response = client.models.generate_content(model=MODEL, contents=prompt)
-    return parse_feedback(response.text.strip())
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+    )
+    raw = response.choices[0].message.content.strip()
+    result = parse_feedback(raw)
+    # 파싱 실패 시 원문을 그대로 보여주기 위해 raw 저장
+    if not result:
+        result = {"__raw__": raw}
+    return result
+
+
+def nl2br(text: str) -> str:
+    return text.replace("\n", "<br>")
 
 
 # ── 페이지 설정 ──────────────────────────────────────────
@@ -108,8 +165,10 @@ st.markdown("""
   .eval-good  { background: #d4edda; border-left: 4px solid #28a745; }
   .eval-ok    { background: #fff3cd; border-left: 4px solid #ffc107; }
   .eval-bad   { background: #f8d7da; border-left: 4px solid #dc3545; }
+  .my-answer  { background: #f5f0ff; border-left: 4px solid #7c3aed; }
   .model-ans  { background: #e8f4fd; border-left: 4px solid #0d6efd; }
   .correction { background: #f8f9fa; border-left: 4px solid #6c757d; }
+  .learn-point { background: #fff8e1; border-left: 4px solid #f59e0b; }
   .vocab-word { font-weight: bold; color: #0d6efd; }
   .progress-text { color: #6c757d; font-size: 0.9rem; }
 </style>
@@ -127,49 +186,130 @@ if "answered" not in st.session_state:
     st.session_state.answered = False
 if "finished" not in st.session_state:
     st.session_state.finished = False
+if "user_answer" not in st.session_state:
+    st.session_state.user_answer = ""
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "session_date" not in st.session_state:
+    st.session_state.session_date = str(date.today())
+if "saved_count" not in st.session_state:
+    st.session_state.saved_count = 0
 
 
-# ── 헤더 ────────────────────────────────────────────────
-st.title("📖 영어 작문 연습")
-st.caption("한국어 문장을 영어로 번역하고 AI 피드백을 받아보세요")
-st.divider()
+def go_home():
+    flush_history_to_file()
+    st.session_state.sentences = []
+    st.session_state.idx = 0
+    st.session_state.feedback = None
+    st.session_state.answered = False
+    st.session_state.finished = False
+    st.session_state.user_answer = ""
+    st.session_state.history = []
+    st.session_state.saved_count = 0
+    st.session_state.session_date = str(date.today())
+
 
 client = get_client()
 
 
-# ── 문장 생성 ────────────────────────────────────────────
+# ── 홈 화면 ──────────────────────────────────────────────
 if not st.session_state.sentences:
+    st.title("📖 영어 작문 연습")
+    st.caption("한국어 문장을 영어로 번역하고 AI 피드백을 받아보세요")
+    st.divider()
+
     if st.button("🎯 오늘의 연습 시작", type="primary", use_container_width=True):
         with st.spinner("문장 생성 중..."):
-            st.session_state.sentences = generate_sentences(client)
+            st.session_state.sentences = [generate_one_sentence(client)]
             st.session_state.idx = 0
             st.session_state.feedback = None
             st.session_state.answered = False
             st.session_state.finished = False
+            st.session_state.user_answer = ""
+            st.session_state.history = []
+            st.session_state.saved_count = 0
+            st.session_state.session_date = str(date.today())
         st.rerun()
+
+    # 이전 기록 표시
+    all_history = load_all_history()
+    if all_history:
+        st.divider()
+        st.subheader("📋 이전 연습 기록")
+        for si, session in enumerate(reversed(all_history)):
+            real_si = len(all_history) - 1 - si
+            session_date = session.get("date", "")
+            items = session.get("items", [])
+            answered = [i for i in items if i.get("user_answer")]
+            label = f"📅 {session_date}  —  {len(items)}문장 ({len(answered)}개 답변)"
+            with st.expander(label):
+                for j, item in enumerate(items):
+                    col_content, col_del = st.columns([9, 1])
+                    with col_content:
+                        eval_icon = item.get("eval", "").split()[0] if item.get("eval") else ""
+                        st.markdown(f"**{j+1}. {item['korean']}** {eval_icon}")
+                        if item.get("user_answer"):
+                            st.markdown(f"✏️ **내 번역:** {item['user_answer']}")
+                        else:
+                            st.markdown("✏️ **내 번역:** *(건너뜀)*")
+                        if item.get("model_ans"):
+                            first = extract_first_model_ans(item["model_ans"])
+                            st.markdown(f"📌 **모범 번역:** {first}")
+                    with col_del:
+                        if st.button("🗑️", key=f"del_{real_si}_{j}", help="이 항목 삭제"):
+                            all_history[real_si]["items"].pop(j)
+                            if not all_history[real_si]["items"]:
+                                all_history.pop(real_si)
+                            with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+                                json.dump(all_history, f, ensure_ascii=False, indent=2)
+                            st.rerun()
+                    st.markdown("---")
     st.stop()
 
 
 # ── 완료 화면 ────────────────────────────────────────────
 if st.session_state.finished:
+    flush_history_to_file()
+
+    st.title("📖 영어 작문 연습")
+    st.divider()
     st.success("🎉 오늘 연습 완료!")
-    if st.button("🔄 다시 시작", use_container_width=True):
-        st.session_state.sentences = []
-        st.session_state.idx = 0
-        st.session_state.feedback = None
-        st.session_state.answered = False
-        st.session_state.finished = False
+
+    if st.session_state.history:
+        st.subheader("📋 오늘의 연습 기록")
+        for i, item in enumerate(st.session_state.history, 1):
+            with st.expander(f"{i}. {item['korean'][:35]}{'...' if len(item['korean']) > 35 else ''}"):
+                st.markdown(f"**🇰🇷 한국어:** {item['korean']}")
+                st.markdown(f"**✏️ 내 번역:** {item['user_answer'] if item['user_answer'] else '*(건너뜀)*'}")
+                model_ans = item["feedback"].get("모범 번역", "") if item["feedback"] else ""
+                if model_ans:
+                    st.markdown("**📌 모범 번역:**")
+                    st.markdown(model_ans)
+
+    if st.button("🏠 홈으로", use_container_width=True):
+        go_home()
         st.rerun()
     st.stop()
 
 
-# ── 현재 문장 ────────────────────────────────────────────
+# ── 연습 화면 헤더 ───────────────────────────────────────
 total = len(st.session_state.sentences)
 idx = st.session_state.idx
 korean = st.session_state.sentences[idx]
 
-st.markdown(f'<p class="progress-text">{idx + 1} / {total}</p>', unsafe_allow_html=True)
-st.progress((idx) / total)
+col_title, col_home = st.columns([5, 1])
+with col_title:
+    st.title("📖 영어 작문 연습")
+with col_home:
+    st.markdown("<div style='padding-top:16px'>", unsafe_allow_html=True)
+    if st.button("🏠 홈", help="홈으로 돌아가기 (현재까지 기록은 저장됩니다)"):
+        go_home()
+        st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+st.divider()
+
+st.markdown(f'<p class="progress-text">오늘 {idx + 1}번째 문장</p>', unsafe_allow_html=True)
 
 st.markdown(f'<div class="korean-sentence">🇰🇷 {korean}</div>', unsafe_allow_html=True)
 
@@ -186,70 +326,108 @@ if not st.session_state.answered:
 
     if submitted and user_input.strip():
         with st.spinner("채점 중..."):
+            st.session_state.user_answer = user_input.strip()
             st.session_state.feedback = get_feedback(client, korean, user_input.strip())
         st.session_state.answered = True
         st.rerun()
 
     if skipped:
-        st.session_state.answered = False
+        st.session_state.history.append({
+            "korean": korean,
+            "user_answer": "",
+            "feedback": None,
+        })
+        flush_history_to_file()
         st.session_state.feedback = None
-        if idx + 1 >= total:
-            st.session_state.finished = True
-        else:
-            st.session_state.idx += 1
+        st.session_state.user_answer = ""
+        st.session_state.answered = True
         st.rerun()
 
 
+
 # ── 피드백 표시 ──────────────────────────────────────────
-if st.session_state.answered and st.session_state.feedback:
+if st.session_state.answered:
     fb = st.session_state.feedback
 
-    # 평가
-    eval_text = fb.get("평가", "")
-    if "✅" in eval_text:
-        css = "eval-good"
-    elif "🔶" in eval_text:
-        css = "eval-ok"
-    else:
-        css = "eval-bad"
-    st.markdown(f'<div class="feedback-box {css}"><strong>{eval_text}</strong></div>', unsafe_allow_html=True)
+    if fb is not None:
+        # 파싱 실패 시 원문 표시
+        if "__raw__" in fb:
+            st.markdown(f'<div class="feedback-box correction">{nl2br(fb["__raw__"])}</div>', unsafe_allow_html=True)
+        else:
+            # 평가
+            eval_text = fb.get("평가", "")
+            if "✅" in eval_text:
+                css = "eval-good"
+            elif "🔶" in eval_text:
+                css = "eval-ok"
+            else:
+                css = "eval-bad"
+            st.markdown(f'<div class="feedback-box {css}"><strong>{eval_text}</strong></div>', unsafe_allow_html=True)
 
-    # 모범 번역
-    model_ans = fb.get("모범 번역", "")
-    if model_ans:
-        st.markdown(f'<div class="feedback-box model-ans">📌 <strong>모범 번역</strong><br>{model_ans}</div>', unsafe_allow_html=True)
+            # 내 번역
+            if st.session_state.user_answer:
+                st.markdown(f'<div class="feedback-box my-answer">🙋 <strong>내 번역</strong><br>{st.session_state.user_answer}</div>', unsafe_allow_html=True)
 
-    # 핵심 수정
-    corrections = fb.get("핵심 수정", "")
-    if corrections:
-        st.markdown(f'<div class="feedback-box correction">✏️ <strong>핵심 수정</strong><br>{corrections}</div>', unsafe_allow_html=True)
+            # 모범 번역
+            model_ans = fb.get("모범 번역", "")
+            if model_ans:
+                st.markdown(f'<div class="feedback-box model-ans">📌 <strong>모범 번역</strong><br>{nl2br(model_ans)}</div>', unsafe_allow_html=True)
 
-    # 어려운 단어
-    vocab = fb.get("어려운 단어", "")
-    if vocab:
-        rows = [r.strip() for r in vocab.split("\n") if "|" in r]
-        rows = [r for r in rows if not r.lower().startswith("단어")]
-        if rows:
-            st.markdown("**📚 어려운 단어**")
-            table_html = '<table style="width:100%;border-collapse:collapse;margin-top:6px">'
-            table_html += '<tr style="background:#f0f4f8"><th style="padding:8px;text-align:left">단어/표현</th><th style="padding:8px;text-align:left">뜻</th><th style="padding:8px;text-align:left">예문</th></tr>'
-            for row in rows:
-                parts = [p.strip() for p in row.split("|")]
-                if len(parts) >= 3:
-                    table_html += f'<tr style="border-top:1px solid #e2e8f0"><td style="padding:8px"><span class="vocab-word">{parts[0]}</span></td><td style="padding:8px">{parts[1]}</td><td style="padding:8px;color:#555;font-size:0.9em">{parts[2]}</td></tr>'
-            table_html += "</table>"
-            st.markdown(table_html, unsafe_allow_html=True)
+            # 핵심 수정
+            corrections = fb.get("핵심 수정", "")
+            if corrections:
+                st.markdown(f'<div class="feedback-box correction">✏️ <strong>핵심 수정</strong><br>{nl2br(corrections)}</div>', unsafe_allow_html=True)
+
+            # 학습 포인트
+            learn_point = fb.get("학습 포인트", "")
+            if learn_point:
+                st.markdown(f'<div class="feedback-box learn-point">💡 <strong>학습 포인트</strong><br>{nl2br(learn_point)}</div>', unsafe_allow_html=True)
+
+            # 어려운 단어
+            vocab = fb.get("어려운 단어", "")
+            if vocab:
+                rows = [r.strip() for r in vocab.split("\n") if "|" in r]
+                rows = [r for r in rows if not r.lower().startswith("단어")]
+                if rows:
+                    st.markdown("**📚 어려운 단어**")
+                    table_html = '<table style="width:100%;border-collapse:collapse;margin-top:6px">'
+                    table_html += '<tr style="background:#f0f4f8"><th style="padding:8px;text-align:left">단어/표현</th><th style="padding:8px;text-align:left">뜻</th><th style="padding:8px;text-align:left">예문</th></tr>'
+                    for row in rows:
+                        parts = [p.strip() for p in row.split("|")]
+                        if len(parts) >= 3:
+                            table_html += f'<tr style="border-top:1px solid #e2e8f0"><td style="padding:8px"><span class="vocab-word">{parts[0]}</span></td><td style="padding:8px">{parts[1]}</td><td style="padding:8px;color:#555;font-size:0.9em">{parts[2]}</td></tr>'
+                    table_html += "</table>"
+                    st.markdown(table_html, unsafe_allow_html=True)
 
     st.markdown("")
 
-    # 다음 버튼
-    if idx + 1 >= total:
-        if st.button("🎉 완료!", type="primary", use_container_width=True):
+    # 선택 버튼 (항상 표시)
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🏁 오늘은 여기까지", use_container_width=True):
+            if fb is not None:
+                st.session_state.history.append({
+                    "korean": korean,
+                    "user_answer": st.session_state.user_answer,
+                    "feedback": fb,
+                })
+                flush_history_to_file()
             st.session_state.finished = True
             st.rerun()
-    else:
-        if st.button("▶ 다음 문장", type="primary", use_container_width=True):
+    with col2:
+        if st.button("➕ 한 문장 더", type="primary", use_container_width=True):
+            if fb is not None:
+                st.session_state.history.append({
+                    "korean": korean,
+                    "user_answer": st.session_state.user_answer,
+                    "feedback": fb,
+                })
+                flush_history_to_file()
+            with st.spinner("새 문장 생성 중..."):
+                new_sentence = generate_one_sentence(client)
+            st.session_state.sentences.append(new_sentence)
             st.session_state.idx += 1
             st.session_state.feedback = None
             st.session_state.answered = False
+            st.session_state.user_answer = ""
             st.rerun()

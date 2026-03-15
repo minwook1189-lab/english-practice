@@ -5,3 +5,5 @@ __pycache__/
 venv/
 *.egg-info/
 .DS_Store
+영어연습_실행.bat
+history.json

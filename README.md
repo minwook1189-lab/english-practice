@@ -1,37 +1,33 @@
-# 📖 영어 작문 연습 (English Writing Practice)
+# 영어 작문 연습 (English Writing Practice)
 
 한국어 문장을 영어로 번역하고 AI 피드백을 받는 웹 앱입니다.
 
 ## 주요 기능
 
-- AI가 매번 새로운 한국어 문장 10개 생성
-- 사용자가 영어로 번역 후 제출
-- AI 피드백: 평가 / 모범 번역 / 핵심 수정 / 어려운 단어
-- 브라우저 기반 UI (터미널 타이핑 불필요)
+- AI가 한국어 문장 1개 생성 → 영어로 번역 후 제출
+- 추가 연습: "➕ 한 문장 더" 버튼으로 계속 연습 가능
+- AI 채점: 평가 / 내 답변 / 모범 번역 3가지 버전 / 핵심 수정 / 학습 포인트 / 어려운 단어
+- 연습 기록 자동 저장 (`history.json`) 및 홈 화면에서 조회/삭제
 
 ## 기술 스택
 
 - Python 3.x
 - [Streamlit](https://streamlit.io) — 웹 UI
-- [Google Gemini API](https://aistudio.google.com) — AI 피드백 (무료)
+- [Groq API](https://console.groq.com) — AI 피드백 (llama-3.3-70b-versatile)
 
 ## 설치 방법
 
 ```bash
-pip install streamlit google-genai
+pip install streamlit groq
 ```
 
 ## 환경변수 설정
 
-1. [Google AI Studio](https://aistudio.google.com/apikey)에서 무료 API 키 발급
-2. 시스템 환경변수에 추가:
+[Groq Console](https://console.groq.com)에서 무료 API 키 발급 후 `영어연습_실행.bat` 파일에 설정:
 
 ```
-GEMINI_API_KEY=your_api_key_here
+set GROQ_API_KEY=your_api_key_here
 ```
-
-**Windows 설정 방법:**
-`윈도우 키 + R` → `sysdm.cpl` → 고급 → 환경 변수 → 새로 만들기
 
 ## 실행 방법
 
@@ -40,18 +36,20 @@ GEMINI_API_KEY=your_api_key_here
 
 ### 방법 2: 터미널
 ```bash
-streamlit run app.py
+.venv/Scripts/streamlit.exe run app.py
 ```
 
 브라우저가 자동으로 열립니다 → `http://localhost:8501`
 
-## 피드백 형식
+## 채점 결과 형식
 
 | 항목 | 내용 |
 |------|------|
 | 평가 | ✅ 정확함 / 🔶 개선 가능 / ❌ 오류 있음 |
-| 모범 번역 | 자연스러운 영어 표현 |
-| 핵심 수정 | 틀리거나 어색한 부분 간결하게 |
+| 내 답변 | 제출한 번역 |
+| 모범 번역 | 자연스러운 영어 표현 3가지 버전 |
+| 핵심 수정 | 틀리거나 어색한 부분 상세 설명 |
+| 학습 포인트 | 이번 문장에서 배울 핵심 표현 |
 | 어려운 단어 | 단어 / 뜻 / 예문 표 |
 
 ## 대상 학습자
