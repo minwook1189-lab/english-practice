@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
 영어 작문 연습 — Streamlit 웹 앱
-pip install google-generativeai streamlit
-환경변수: GOOGLE_API_KEY  (https://aistudio.google.com 에서 무료 발급)
+pip install groq streamlit
+환경변수: GROQ_API_KEY  (https://console.groq.com 에서 무료 발급)
 """
 
 import streamlit as st
-import google.generativeai as genai
+from groq import Groq
 import os
 import time
 import json
 from datetime import date
 
-MODEL = "gemini-2.0-flash-lite"
+MODEL = "llama-3.3-70b-versatile"
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.json")
 
 SENTENCE_PROMPT = """영어 작문 연습용 한국어 문장 1개를 만들어주세요.
@@ -117,60 +117,46 @@ def flush_history_to_file():
 
 # ── API 관련 ──────────────────────────────────────────────
 def get_client():
-    api_key = os.environ.get("GOOGLE_API_KEY")
+    api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        st.error("❌ GOOGLE_API_KEY 환경변수가 없습니다. https://aistudio.google.com 에서 무료로 발급받으세요.")
+        st.error("❌ GROQ_API_KEY 환경변수가 없습니다. https://console.groq.com 에서 무료로 발급받으세요.")
         st.stop()
-    genai.configure(api_key=api_key)
-    return genai.GenerativeModel(MODEL)
+    return Groq(api_key=api_key)
 
-
-def call_with_retry(client, prompt, temperature):
-    from google.api_core.exceptions import ResourceExhausted
-    for attempt in range(5):
-        try:
-            return client.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(temperature=temperature),
-            )
-        except ResourceExhausted:
-            wait = 2 ** attempt
-            time.sleep(wait)
-    raise Exception("Gemini API 할당량 초과 - 나중에 다시 시도해주세요.")
+def is_korean_only(text: str) -> bool:
+    import re
+    # 한글, 숫자, 공백, 한국어 특수문자만 허용 (영어를 포함한 외국어 차단)
+    return not bool(re.search(r'[a-zA-Z\u4e00-\u9fff\u3040-\u30ff]', text))
 
 
 def generate_one_sentence(client) -> str:
-    response = call_with_retry(client, SENTENCE_PROMPT, temperature=0.9)
-    return response.text.strip()
-
-def parse_feedback(text: str) -> dict:
-    sections = {}
-    current = None
-    current_lines = []
-    for line in text.split("\n"):
-        stripped = line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            if current:
-                sections[current] = "\n".join(current_lines).strip()
-            current = stripped[1:-1]
-            current_lines = []
-        else:
-            current_lines.append(line)
-    if current:
-        sections[current] = "\n".join(current_lines).strip()
-    return sections
+    for _ in range(3):
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": SENTENCE_PROMPT}],
+            temperature=0.9,
+        )
+        sentence = response.choices[0].message.content.strip()
+        if is_korean_only(sentence):
+            return sentence
+    # 3회 시도 후에도 외국어가 설인 처각 자동 제거
+    import re
+    return re.sub(r'[a-zA-Z\u4e00-\u9fff\u3040-\u30ff]+', '', sentence).strip()
 
 
 def get_feedback(client, korean: str, user_answer: str) -> dict:
     prompt = FEEDBACK_PROMPT.format(korean=korean, user_answer=user_answer)
-    response = call_with_retry(client, prompt, temperature=0.3)
-    raw = response.text.strip()
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+    )
+    raw = response.choices[0].message.content.strip()
     result = parse_feedback(raw)
     # 파싱 실패 시 원문을 그대로 보여주기 위해 raw 저장
     if not result:
         result = {"__raw__": raw}
     return result
-
 
 def nl2br(text: str) -> str:
     return text.replace("\n", "<br>")
