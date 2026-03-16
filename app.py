@@ -148,23 +148,18 @@ def parse_feedback(text: str) -> dict:
     sections = {}
     current = None
     current_lines = []
-    for line in text.split("
-"):
+    for line in text.split("\n"):
         stripped = line.strip()
         if stripped.startswith("[") and stripped.endswith("]"):
             if current:
-                sections[current] = "
-".join(current_lines).strip()
+                sections[current] = "\n".join(current_lines).strip()
             current = stripped[1:-1]
             current_lines = []
         else:
             current_lines.append(line)
     if current:
-        sections[current] = "
-".join(current_lines).strip()
+        sections[current] = "\n".join(current_lines).strip()
     return sections
-
-
 def get_feedback(client, korean: str, user_answer: str) -> dict:
     prompt = FEEDBACK_PROMPT.format(korean=korean, user_answer=user_answer)
     response = client.chat.completions.create(
