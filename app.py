@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
 영어 작문 연습 — Streamlit 웹 앱
-pip install groq streamlit
-환경변수: GROQ_API_KEY  (https://console.groq.com 에서 무료 발급)
+pip install google-generativeai streamlit
+환경변수: GOOGLE_API_KEY  (https://aistudio.google.com 에서 무료 발급)
 """
 
 import streamlit as st
-from groq import Groq
+import google.generativeai as genai
 import os
 import json
 from datetime import date
 
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "gemini-2.0-flash"
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.json")
 
 SENTENCE_PROMPT = """영어 작문 연습용 한국어 문장 1개를 만들어주세요.
@@ -116,20 +116,20 @@ def flush_history_to_file():
 
 # ── API 관련 ──────────────────────────────────────────────
 def get_client():
-    api_key = os.environ.get("GROQ_API_KEY")
+    api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
-        st.error("❌ GROQ_API_KEY 환경변수가 없습니다. https://console.groq.com 에서 무료로 발급받으세요.")
+        st.error("❌ GOOGLE_API_KEY 환경변수가 없습니다. https://aistudio.google.com 에서 무료로 발급받으세요.")
         st.stop()
-    return Groq(api_key=api_key)
+    genai.configure(api_key=api_key)
+    return genai.GenerativeModel(MODEL)
 
 
 def generate_one_sentence(client) -> str:
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": SENTENCE_PROMPT}],
-        temperature=0.9,
+    response = client.generate_content(
+        SENTENCE_PROMPT,
+        generation_config=genai.types.GenerationConfig(temperature=0.9),
     )
-    return response.choices[0].message.content.strip()
+    return response.text.strip()
 
 def parse_feedback(text: str) -> dict:
     sections = {}
@@ -151,12 +151,11 @@ def parse_feedback(text: str) -> dict:
 
 def get_feedback(client, korean: str, user_answer: str) -> dict:
     prompt = FEEDBACK_PROMPT.format(korean=korean, user_answer=user_answer)
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
+    response = client.generate_content(
+        prompt,
+        generation_config=genai.types.GenerationConfig(temperature=0.3),
     )
-    raw = response.choices[0].message.content.strip()
+    raw = response.text.strip()
     result = parse_feedback(raw)
     # 파싱 실패 시 원문을 그대로 보여주기 위해 raw 저장
     if not result:
