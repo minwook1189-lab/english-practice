@@ -12,7 +12,7 @@ import time
 import json
 from datetime import date
 
-MODEL = "gemini-1.5-flash"
+MODEL = "gemini-2.0-flash-lite"
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.json")
 
 SENTENCE_PROMPT = """영어 작문 연습용 한국어 문장 1개를 만들어주세요.
