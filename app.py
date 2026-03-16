@@ -8,6 +8,7 @@ pip install google-generativeai streamlit
 import streamlit as st
 import google.generativeai as genai
 import os
+import time
 import json
 from datetime import date
 
@@ -124,11 +125,22 @@ def get_client():
     return genai.GenerativeModel(MODEL)
 
 
+def call_with_retry(client, prompt, temperature):
+    from google.api_core.exceptions import ResourceExhausted
+    for attempt in range(5):
+        try:
+            return client.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(temperature=temperature),
+            )
+        except ResourceExhausted:
+            wait = 2 ** attempt
+            time.sleep(wait)
+    raise Exception("Gemini API 할당량 초과 - 나중에 다시 시도해주세요.")
+
+
 def generate_one_sentence(client) -> str:
-    response = client.generate_content(
-        SENTENCE_PROMPT,
-        generation_config=genai.types.GenerationConfig(temperature=0.9),
-    )
+    response = call_with_retry(client, SENTENCE_PROMPT, temperature=0.9)
     return response.text.strip()
 
 def parse_feedback(text: str) -> dict:
@@ -151,10 +163,7 @@ def parse_feedback(text: str) -> dict:
 
 def get_feedback(client, korean: str, user_answer: str) -> dict:
     prompt = FEEDBACK_PROMPT.format(korean=korean, user_answer=user_answer)
-    response = client.generate_content(
-        prompt,
-        generation_config=genai.types.GenerationConfig(temperature=0.3),
-    )
+    response = call_with_retry(client, prompt, temperature=0.3)
     raw = response.text.strip()
     result = parse_feedback(raw)
     # 파싱 실패 시 원문을 그대로 보여주기 위해 raw 저장
