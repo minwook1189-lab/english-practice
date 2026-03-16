@@ -8,6 +8,7 @@ pip install groq streamlit supabase
 import streamlit as st
 from groq import Groq
 import requests
+import json
 import os
 import re
 from datetime import date
@@ -122,7 +123,9 @@ def flush_history_to_db():
             "eval": eval_text,
             "model_ans": first_ans,
         })
-    requests.post(_sb_url(), headers=_sb_headers(), json=rows, timeout=10)
+    headers = _sb_headers()
+    headers["Content-Type"] = "application/json; charset=utf-8"
+    requests.post(_sb_url(), headers=headers, data=json.dumps(rows, ensure_ascii=False).encode("utf-8"), timeout=10)
     st.session_state.saved_count = len(st.session_state.history)
 
 
