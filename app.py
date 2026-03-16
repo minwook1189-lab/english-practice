@@ -250,7 +250,11 @@ if not st.session_state.sentences:
 
     if st.button("🎯 오늘의 연습 시작", type="primary", use_container_width=True):
         with st.spinner("문장 생성 중..."):
-            st.session_state.sentences = [generate_one_sentence(client)]
+            try:
+                st.session_state.sentences = [generate_one_sentence(client)]
+            except Exception as e:
+                st.error(f"🚨 {e}")
+                st.stop()
             st.session_state.idx = 0
             st.session_state.feedback = None
             st.session_state.answered = False
@@ -356,8 +360,12 @@ if not st.session_state.answered:
 
     if submitted and user_input.strip():
         with st.spinner("채점 중..."):
-            st.session_state.user_answer = user_input.strip()
-            st.session_state.feedback = get_feedback(client, korean, user_input.strip())
+            try:
+                st.session_state.user_answer = user_input.strip()
+                st.session_state.feedback = get_feedback(client, korean, user_input.strip())
+            except Exception as e:
+                st.error(f"🚨 {e}")
+                st.stop()
         st.session_state.answered = True
         st.rerun()
 
@@ -454,7 +462,11 @@ if st.session_state.answered:
                 })
                 flush_history_to_file()
             with st.spinner("새 문장 생성 중..."):
-                new_sentence = generate_one_sentence(client)
+                try:
+                    new_sentence = generate_one_sentence(client)
+                except Exception as e:
+                    st.error(f"🚨 {e}")
+                    st.stop()
             st.session_state.sentences.append(new_sentence)
             st.session_state.idx += 1
             st.session_state.feedback = None
