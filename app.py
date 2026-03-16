@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """
 영어 작문 연습 — Streamlit 웹 앱
-pip install groq streamlit
-환경변수: GROQ_API_KEY  (https://console.groq.com 에서 무료 발급)
+pip install groq streamlit supabase
+환경변수: GROQ_API_KEY, SUPABASE_URL, SUPABASE_KEY
 """
 
 import streamlit as st
 from groq import Groq
+import requests
 import os
-import time
-import json
+import re
 from datetime import date
 
 MODEL = "llama-3.3-70b-versatile"
-HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.json")
 
 SENTENCE_PROMPT = """영어 작문 연습용 한국어 문장 1개를 만들어주세요.
 
@@ -59,19 +58,45 @@ FEEDBACK_PROMPT = """영어 작문 강사로서 아래 번역을 평가해주세
 불필요한 인사말, 칭찬 금지."""
 
 
-# ── 기록 파일 관련 ────────────────────────────────────────
+# ── Supabase REST ─────────────────────────────────────────
+def _sb_headers():
+    key = os.environ.get("SUPABASE_KEY")
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+
+def _sb_url(path=""):
+    base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    if not base or not os.environ.get("SUPABASE_KEY"):
+        st.error("❌ SUPABASE_URL 또는 SUPABASE_KEY 환경변수가 없습니다.")
+        st.stop()
+    return f"{base}/rest/v1/history{path}"
+
+
 def load_all_history() -> list:
-    if os.path.exists(HISTORY_FILE):
-        try:
-            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return []
-    return []
+    try:
+        resp = requests.get(_sb_url("?select=*&order=created_at"), headers=_sb_headers(), timeout=10)
+        grouped = {}
+        for row in resp.json():
+            d = row["session_date"]
+            if d not in grouped:
+                grouped[d] = {"date": d, "items": []}
+            grouped[d]["items"].append({
+                "id": row["id"],
+                "korean": row.get("korean", ""),
+                "user_answer": row.get("user_answer", ""),
+                "eval": row.get("eval", ""),
+                "model_ans": row.get("model_ans", ""),
+            })
+        return list(grouped.values())
+    except Exception:
+        return []
 
 
 def extract_first_model_ans(model_ans_text: str) -> str:
-    """모범 번역 텍스트에서 첫 번째 버전만 추출"""
     for line in model_ans_text.splitlines():
         line = line.strip()
         if line.startswith("1."):
@@ -79,43 +104,33 @@ def extract_first_model_ans(model_ans_text: str) -> str:
     return model_ans_text.splitlines()[0].strip() if model_ans_text else ""
 
 
-def history_item_to_savable(item: dict) -> dict:
-    """세션 히스토리 항목을 JSON 저장 가능한 형태로 변환"""
-    model_ans = item.get("model_ans", "")
-    first_ans = extract_first_model_ans(model_ans) if model_ans else ""
-    return {
-        "korean": item.get("korean", ""),
-        "user_answer": item.get("user_answer", ""),
-        "eval": item.get("eval", ""),
-        "model_ans": first_ans,
-    }
-
-
-def append_items_to_file(new_items: list, session_date: str):
-    """새 항목만 파일에 추가 (같은 날짜면 이어붙임, 덮어쓰지 않음)"""
-    if not new_items:
-        return
-    all_history = load_all_history()
-    savable = [history_item_to_savable(i) for i in new_items]
-    for entry in all_history:
-        if entry["date"] == session_date:
-            entry["items"].extend(savable)
-            break
-    else:
-        all_history.append({"date": session_date, "items": savable})
-    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(all_history, f, ensure_ascii=False, indent=2)
-
-
-def flush_history_to_file():
-    """아직 저장되지 않은 항목만 파일에 추가"""
+def flush_history_to_db():
     saved_count = st.session_state.get("saved_count", 0)
     new_items = st.session_state.history[saved_count:]
-    if new_items:
-        append_items_to_file(new_items, st.session_state.session_date)
-        st.session_state.saved_count = len(st.session_state.history)
+    if not new_items:
+        return
+    rows = []
+    for item in new_items:
+        fb = item.get("feedback") or {}
+        eval_text = fb.get("평가", "")
+        model_ans_text = fb.get("모범 번역", "")
+        first_ans = extract_first_model_ans(model_ans_text) if model_ans_text else ""
+        rows.append({
+            "session_date": st.session_state.session_date,
+            "korean": item.get("korean", ""),
+            "user_answer": item.get("user_answer", ""),
+            "eval": eval_text,
+            "model_ans": first_ans,
+        })
+    requests.post(_sb_url(), headers=_sb_headers(), json=rows, timeout=10)
+    st.session_state.saved_count = len(st.session_state.history)
 
-# ── API 관련 ──────────────────────────────────────────────
+
+def delete_history_item(item_id: int):
+    requests.delete(_sb_url(f"?id=eq.{item_id}"), headers=_sb_headers(), timeout=10)
+
+
+# ── Groq API ──────────────────────────────────────────────
 def get_client():
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
@@ -123,9 +138,8 @@ def get_client():
         st.stop()
     return Groq(api_key=api_key)
 
+
 def is_korean_only(text: str) -> bool:
-    import re
-    # 한글, 숫자, 공백, 한국어 특수문자만 허용 (영어를 포함한 외국어 차단)
     return not bool(re.search(r'[a-zA-Z\u4e00-\u9fff\u3040-\u30ff]', text))
 
 
@@ -139,8 +153,6 @@ def generate_one_sentence(client) -> str:
         sentence = response.choices[0].message.content.strip()
         if is_korean_only(sentence):
             return sentence
-    # 3회 시도 후에도 외국어가 설인 처각 자동 제거
-    import re
     return re.sub(r'[a-zA-Z\u4e00-\u9fff\u3040-\u30ff]+', '', sentence).strip()
 
 
@@ -160,6 +172,8 @@ def parse_feedback(text: str) -> dict:
     if current:
         sections[current] = "\n".join(current_lines).strip()
     return sections
+
+
 def get_feedback(client, korean: str, user_answer: str) -> dict:
     prompt = FEEDBACK_PROMPT.format(korean=korean, user_answer=user_answer)
     response = client.chat.completions.create(
@@ -169,10 +183,10 @@ def get_feedback(client, korean: str, user_answer: str) -> dict:
     )
     raw = response.choices[0].message.content.strip()
     result = parse_feedback(raw)
-    # 파싱 실패 시 원문을 그대로 보여주기 위해 raw 저장
     if not result:
         result = {"__raw__": raw}
     return result
+
 
 def nl2br(text: str) -> str:
     return text.replace("\n", "<br>")
@@ -229,7 +243,7 @@ if "saved_count" not in st.session_state:
 
 
 def go_home():
-    flush_history_to_file()
+    flush_history_to_db()
     st.session_state.sentences = []
     st.session_state.idx = 0
     st.session_state.feedback = None
@@ -272,8 +286,7 @@ if not st.session_state.sentences:
     if all_history:
         st.divider()
         st.subheader("📋 이전 연습 기록")
-        for si, session in enumerate(reversed(all_history)):
-            real_si = len(all_history) - 1 - si
+        for session in reversed(all_history):
             session_date = session.get("date", "")
             items = session.get("items", [])
             answered = [i for i in items if i.get("user_answer")]
@@ -292,12 +305,8 @@ if not st.session_state.sentences:
                             first = extract_first_model_ans(item["model_ans"])
                             st.markdown(f"📌 **모범 번역:** {first}")
                     with col_del:
-                        if st.button("🗑️", key=f"del_{real_si}_{j}", help="이 항목 삭제"):
-                            all_history[real_si]["items"].pop(j)
-                            if not all_history[real_si]["items"]:
-                                all_history.pop(real_si)
-                            with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-                                json.dump(all_history, f, ensure_ascii=False, indent=2)
+                        if st.button("🗑️", key=f"del_{item['id']}", help="이 항목 삭제"):
+                            delete_history_item(item["id"])
                             st.rerun()
                     st.markdown("---")
     st.stop()
@@ -305,7 +314,7 @@ if not st.session_state.sentences:
 
 # ── 완료 화면 ────────────────────────────────────────────
 if st.session_state.finished:
-    flush_history_to_file()
+    flush_history_to_db()
 
     st.title("📖 영어 작문 연습")
     st.divider()
@@ -329,7 +338,6 @@ if st.session_state.finished:
 
 
 # ── 연습 화면 헤더 ───────────────────────────────────────
-total = len(st.session_state.sentences)
 idx = st.session_state.idx
 korean = st.session_state.sentences[idx]
 
@@ -346,7 +354,6 @@ with col_home:
 st.divider()
 
 st.markdown(f'<p class="progress-text">오늘 {idx + 1}번째 문장</p>', unsafe_allow_html=True)
-
 st.markdown(f'<div class="korean-sentence">🇰🇷 {korean}</div>', unsafe_allow_html=True)
 
 
@@ -377,12 +384,11 @@ if not st.session_state.answered:
             "user_answer": "",
             "feedback": None,
         })
-        flush_history_to_file()
+        flush_history_to_db()
         st.session_state.feedback = None
         st.session_state.user_answer = ""
         st.session_state.answered = True
         st.rerun()
-
 
 
 # ── 피드백 표시 ──────────────────────────────────────────
@@ -390,11 +396,9 @@ if st.session_state.answered:
     fb = st.session_state.feedback
 
     if fb is not None:
-        # 파싱 실패 시 원문 표시
         if "__raw__" in fb:
             st.markdown(f'<div class="feedback-box correction">{nl2br(fb["__raw__"])}</div>', unsafe_allow_html=True)
         else:
-            # 평가
             eval_text = fb.get("평가", "")
             if "✅" in eval_text:
                 css = "eval-good"
@@ -404,26 +408,21 @@ if st.session_state.answered:
                 css = "eval-bad"
             st.markdown(f'<div class="feedback-box {css}"><strong>{eval_text}</strong></div>', unsafe_allow_html=True)
 
-            # 내 번역
             if st.session_state.user_answer:
                 st.markdown(f'<div class="feedback-box my-answer">🙋 <strong>내 번역</strong><br>{st.session_state.user_answer}</div>', unsafe_allow_html=True)
 
-            # 모범 번역
             model_ans = fb.get("모범 번역", "")
             if model_ans:
                 st.markdown(f'<div class="feedback-box model-ans">📌 <strong>모범 번역</strong><br>{nl2br(model_ans)}</div>', unsafe_allow_html=True)
 
-            # 핵심 수정
             corrections = fb.get("핵심 수정", "")
             if corrections:
                 st.markdown(f'<div class="feedback-box correction">✏️ <strong>핵심 수정</strong><br>{nl2br(corrections)}</div>', unsafe_allow_html=True)
 
-            # 학습 포인트
             learn_point = fb.get("학습 포인트", "")
             if learn_point:
                 st.markdown(f'<div class="feedback-box learn-point">💡 <strong>학습 포인트</strong><br>{nl2br(learn_point)}</div>', unsafe_allow_html=True)
 
-            # 어려운 단어
             vocab = fb.get("어려운 단어", "")
             if vocab:
                 rows = [r.strip() for r in vocab.split("\n") if "|" in r]
@@ -441,7 +440,6 @@ if st.session_state.answered:
 
     st.markdown("")
 
-    # 선택 버튼 (항상 표시)
     col1, col2 = st.columns(2)
     with col1:
         if st.button("🏁 오늘은 여기까지", use_container_width=True):
@@ -451,7 +449,7 @@ if st.session_state.answered:
                     "user_answer": st.session_state.user_answer,
                     "feedback": fb,
                 })
-                flush_history_to_file()
+                flush_history_to_db()
             st.session_state.finished = True
             st.rerun()
     with col2:
@@ -462,7 +460,7 @@ if st.session_state.answered:
                     "user_answer": st.session_state.user_answer,
                     "feedback": fb,
                 })
-                flush_history_to_file()
+                flush_history_to_db()
             with st.spinner("새 문장 생성 중..."):
                 try:
                     new_sentence = generate_one_sentence(client)
