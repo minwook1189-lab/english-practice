@@ -62,13 +62,35 @@ FEEDBACK_PROMPT = """영어 작문 강사로서 아래 번역을 평가해주세
 
 
 # ── Groq REST API (requests 직접 호출 — httpx 인코딩 문제 회피) ──────
-def _groq_headers() -> dict:
-    api_key = os.environ.get("GROQ_API_KEY", "")
-    if not api_key:
-        st.error("❌ GROQ_API_KEY 환경변수가 없습니다. https://console.groq.com 에서 무료로 발급받으세요.")
+def _get_groq_api_key() -> str:
+    # st.secrets 우선 (Streamlit Cloud), 없으면 환경변수
+    try:
+        key = st.secrets.get("GROQ_API_KEY", "")
+    except Exception:
+        key = ""
+    if not key:
+        key = os.environ.get("GROQ_API_KEY", "")
+    if not key:
+        st.error("❌ GROQ_API_KEY가 설정되지 않았습니다. https://console.groq.com 에서 발급받으세요.")
         st.stop()
+    # ASCII 검증: HTTP 헤더는 ASCII만 허용
+    try:
+        key.encode("ascii")
+    except UnicodeEncodeError:
+        bad_chars = [(i, c) for i, c in enumerate(key) if ord(c) > 127]
+        st.error(
+            f"❌ GROQ_API_KEY에 ASCII가 아닌 문자가 포함되어 있습니다.\n\n"
+            f"문제가 되는 위치: {bad_chars[:5]}\n\n"
+            f"Streamlit Cloud → Settings → Secrets에서 GROQ_API_KEY 값을 삭제하고 "
+            f"Groq 콘솔(console.groq.com)에서 키를 직접 복사해 다시 입력해주세요."
+        )
+        st.stop()
+    return key
+
+
+def _groq_headers() -> dict:
     return {
-        "Authorization": "Bearer " + api_key,
+        "Authorization": "Bearer " + _get_groq_api_key(),
         "Content-Type": "application/json",
     }
 
