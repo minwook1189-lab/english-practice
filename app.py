@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 영어 작문 연습 — Streamlit 웹 앱
-pip install groq streamlit supabase
+pip install groq streamlit
 환경변수: GROQ_API_KEY, SUPABASE_URL, SUPABASE_KEY
 """
 
@@ -11,6 +12,7 @@ import requests
 import json
 import os
 import re
+import traceback
 from datetime import date
 
 MODEL = "llama-3.3-70b-versatile"
@@ -64,7 +66,7 @@ def _sb_headers():
     key = os.environ.get("SUPABASE_KEY")
     return {
         "apikey": key,
-        "Authorization": f"Bearer {key}",
+        "Authorization": "Bearer " + (key or ""),
         "Content-Type": "application/json",
         "Prefer": "return=minimal",
     }
@@ -74,7 +76,7 @@ def _sb_url(path=""):
     if not base or not os.environ.get("SUPABASE_KEY"):
         st.error("❌ SUPABASE_URL 또는 SUPABASE_KEY 환경변수가 없습니다.")
         st.stop()
-    return f"{base}/rest/v1/history{path}"
+    return base + "/rest/v1/history" + path
 
 
 def load_all_history() -> list:
@@ -106,31 +108,35 @@ def extract_first_model_ans(model_ans_text: str) -> str:
 
 
 def flush_history_to_db():
-    saved_count = st.session_state.get("saved_count", 0)
-    new_items = st.session_state.history[saved_count:]
-    if not new_items:
-        return
-    rows = []
-    for item in new_items:
-        fb = item.get("feedback") or {}
-        eval_text = fb.get("평가", "")
-        model_ans_text = fb.get("모범 번역", "")
-        first_ans = extract_first_model_ans(model_ans_text) if model_ans_text else ""
-        rows.append({
-            "session_date": st.session_state.session_date,
-            "korean": item.get("korean", ""),
-            "user_answer": item.get("user_answer", ""),
-            "eval": eval_text,
-            "model_ans": first_ans,
-        })
-    headers = _sb_headers()
-    headers["Content-Type"] = "application/json; charset=utf-8"
-    requests.post(_sb_url(), headers=headers, data=json.dumps(rows, ensure_ascii=False).encode("utf-8"), timeout=10)
-    st.session_state.saved_count = len(st.session_state.history)
+    try:
+        saved_count = st.session_state.get("saved_count", 0)
+        new_items = st.session_state.history[saved_count:]
+        if not new_items:
+            return
+        rows = []
+        for item in new_items:
+            fb = item.get("feedback") or {}
+            eval_text = fb.get("평가", "")
+            model_ans_text = fb.get("모범 번역", "")
+            first_ans = extract_first_model_ans(model_ans_text) if model_ans_text else ""
+            rows.append({
+                "session_date": st.session_state.session_date,
+                "korean": item.get("korean", ""),
+                "user_answer": item.get("user_answer", ""),
+                "eval": eval_text,
+                "model_ans": first_ans,
+            })
+        headers = _sb_headers()
+        headers["Content-Type"] = "application/json; charset=utf-8"
+        body = json.dumps(rows, ensure_ascii=False).encode("utf-8")
+        requests.post(_sb_url(), headers=headers, data=body, timeout=10)
+        st.session_state.saved_count = len(st.session_state.history)
+    except Exception as e:
+        st.warning(f"⚠️ 기록 저장 실패: {e}\n\n```\n{traceback.format_exc()}\n```")
 
 
 def delete_history_item(item_id: int):
-    requests.delete(_sb_url(f"?id=eq.{item_id}"), headers=_sb_headers(), timeout=10)
+    requests.delete(_sb_url("?id=eq." + str(item_id)), headers=_sb_headers(), timeout=10)
 
 
 # ── Groq API ──────────────────────────────────────────────
@@ -273,6 +279,7 @@ if not st.session_state.sentences:
                 st.session_state.sentences = [generate_one_sentence(client)]
             except Exception as e:
                 st.error(f"🚨 {e}")
+                st.code(traceback.format_exc())
                 st.stop()
             st.session_state.idx = 0
             st.session_state.feedback = None
@@ -308,7 +315,7 @@ if not st.session_state.sentences:
                             first = extract_first_model_ans(item["model_ans"])
                             st.markdown(f"📌 **모범 번역:** {first}")
                     with col_del:
-                        if st.button("🗑️", key=f"del_{item['id']}", help="이 항목 삭제"):
+                        if st.button("🗑️", key="del_" + str(item["id"]), help="이 항목 삭제"):
                             delete_history_item(item["id"])
                             st.rerun()
                     st.markdown("---")
@@ -377,6 +384,7 @@ if not st.session_state.answered:
                 st.session_state.feedback = get_feedback(client, korean, user_input.strip())
             except Exception as e:
                 st.error(f"🚨 {e}")
+                st.code(traceback.format_exc())
                 st.stop()
         st.session_state.answered = True
         st.rerun()
@@ -428,13 +436,13 @@ if st.session_state.answered:
 
             vocab = fb.get("어려운 단어", "")
             if vocab:
-                rows = [r.strip() for r in vocab.split("\n") if "|" in r]
-                rows = [r for r in rows if not r.lower().startswith("단어")]
-                if rows:
+                vocab_rows = [r.strip() for r in vocab.split("\n") if "|" in r]
+                vocab_rows = [r for r in vocab_rows if not r.lower().startswith("단어")]
+                if vocab_rows:
                     st.markdown("**📚 어려운 단어**")
                     table_html = '<table style="width:100%;border-collapse:collapse;margin-top:6px">'
                     table_html += '<tr style="background:#f0f4f8"><th style="padding:8px;text-align:left">단어/표현</th><th style="padding:8px;text-align:left">뜻</th><th style="padding:8px;text-align:left">예문</th></tr>'
-                    for row in rows:
+                    for row in vocab_rows:
                         parts = [p.strip() for p in row.split("|")]
                         if len(parts) >= 3:
                             table_html += f'<tr style="border-top:1px solid #e2e8f0"><td style="padding:8px"><span class="vocab-word">{parts[0]}</span></td><td style="padding:8px">{parts[1]}</td><td style="padding:8px;color:#555;font-size:0.9em">{parts[2]}</td></tr>'
@@ -469,6 +477,7 @@ if st.session_state.answered:
                     new_sentence = generate_one_sentence(client)
                 except Exception as e:
                     st.error(f"🚨 {e}")
+                    st.code(traceback.format_exc())
                     st.stop()
             st.session_state.sentences.append(new_sentence)
             st.session_state.idx += 1
