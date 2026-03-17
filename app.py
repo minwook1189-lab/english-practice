@@ -2,12 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 영어 작문 연습 — Streamlit 웹 앱
-pip install groq streamlit
+pip install streamlit requests
 환경변수: GROQ_API_KEY, SUPABASE_URL, SUPABASE_KEY
 """
 
 import streamlit as st
-from groq import Groq
 import requests
 import json
 import os
@@ -16,6 +15,7 @@ import traceback
 from datetime import date
 
 MODEL = "llama-3.3-70b-versatile"
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 SENTENCE_PROMPT = """영어 작문 연습용 한국어 문장 1개를 만들어주세요.
 
@@ -61,12 +61,34 @@ FEEDBACK_PROMPT = """영어 작문 강사로서 아래 번역을 평가해주세
 불필요한 인사말, 칭찬 금지."""
 
 
+# ── Groq REST API (requests 직접 호출 — httpx 인코딩 문제 회피) ──────
+def _groq_headers() -> dict:
+    api_key = os.environ.get("GROQ_API_KEY", "")
+    if not api_key:
+        st.error("❌ GROQ_API_KEY 환경변수가 없습니다. https://console.groq.com 에서 무료로 발급받으세요.")
+        st.stop()
+    return {
+        "Authorization": "Bearer " + api_key,
+        "Content-Type": "application/json",
+    }
+
+
+def _groq_chat(messages: list, temperature: float = 0.9) -> str:
+    body = json.dumps(
+        {"model": MODEL, "messages": messages, "temperature": temperature},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    resp = requests.post(GROQ_API_URL, headers=_groq_headers(), data=body, timeout=30)
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"].strip()
+
+
 # ── Supabase REST ─────────────────────────────────────────
 def _sb_headers():
-    key = os.environ.get("SUPABASE_KEY")
+    key = os.environ.get("SUPABASE_KEY", "")
     return {
         "apikey": key,
-        "Authorization": "Bearer " + (key or ""),
+        "Authorization": "Bearer " + key,
         "Content-Type": "application/json",
         "Prefer": "return=minimal",
     }
@@ -132,45 +154,21 @@ def flush_history_to_db():
         requests.post(_sb_url(), headers=headers, data=body, timeout=10)
         st.session_state.saved_count = len(st.session_state.history)
     except Exception as e:
-        st.warning(f"⚠️ 기록 저장 실패: {e}\n\n```\n{traceback.format_exc()}\n```")
+        st.warning(f"⚠️ 기록 저장 실패: {e}")
 
 
 def delete_history_item(item_id: int):
     requests.delete(_sb_url("?id=eq." + str(item_id)), headers=_sb_headers(), timeout=10)
 
 
-# ── Groq API ──────────────────────────────────────────────
-def get_client():
-    api_key = os.environ.get("GROQ_API_KEY", "")
-    if not api_key:
-        st.error("❌ GROQ_API_KEY 환경변수가 없습니다. https://console.groq.com 에서 무료로 발급받으세요.")
-        st.stop()
-    try:
-        api_key.encode("ascii")
-    except UnicodeEncodeError:
-        st.error(
-            "❌ GROQ_API_KEY가 올바르지 않습니다. "
-            "API 키에 한글 등 비ASCII 문자가 포함되어 있어요.\n\n"
-            f"현재 GROQ_API_KEY 앞 10자: `{api_key[:10]}`\n\n"
-            "Groq 콘솔(https://console.groq.com)에서 API 키를 다시 확인해서 "
-            "Streamlit Cloud Secrets 또는 .bat 파일을 수정해주세요."
-        )
-        st.stop()
-    return Groq(api_key=api_key)
-
-
+# ── 문장 생성 / 채점 ──────────────────────────────────────
 def is_korean_only(text: str) -> bool:
     return not bool(re.search(r'[a-zA-Z\u4e00-\u9fff\u3040-\u30ff]', text))
 
 
-def generate_one_sentence(client) -> str:
+def generate_one_sentence() -> str:
     for _ in range(3):
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=[{"role": "user", "content": SENTENCE_PROMPT}],
-            temperature=0.9,
-        )
-        sentence = response.choices[0].message.content.strip()
+        sentence = _groq_chat([{"role": "user", "content": SENTENCE_PROMPT}], temperature=0.9)
         if is_korean_only(sentence):
             return sentence
     return re.sub(r'[a-zA-Z\u4e00-\u9fff\u3040-\u30ff]+', '', sentence).strip()
@@ -194,14 +192,9 @@ def parse_feedback(text: str) -> dict:
     return sections
 
 
-def get_feedback(client, korean: str, user_answer: str) -> dict:
+def get_feedback(korean: str, user_answer: str) -> dict:
     prompt = FEEDBACK_PROMPT.format(korean=korean, user_answer=user_answer)
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-    )
-    raw = response.choices[0].message.content.strip()
+    raw = _groq_chat([{"role": "user", "content": prompt}], temperature=0.3)
     result = parse_feedback(raw)
     if not result:
         result = {"__raw__": raw}
@@ -275,9 +268,6 @@ def go_home():
     st.session_state.session_date = str(date.today())
 
 
-client = get_client()
-
-
 # ── 홈 화면 ──────────────────────────────────────────────
 if not st.session_state.sentences:
     st.title("📖 영어 작문 연습")
@@ -287,7 +277,7 @@ if not st.session_state.sentences:
     if st.button("🎯 오늘의 연습 시작", type="primary", use_container_width=True):
         with st.spinner("문장 생성 중..."):
             try:
-                st.session_state.sentences = [generate_one_sentence(client)]
+                st.session_state.sentences = [generate_one_sentence()]
             except Exception as e:
                 st.error(f"🚨 {e}")
                 st.code(traceback.format_exc())
@@ -392,7 +382,7 @@ if not st.session_state.answered:
         with st.spinner("채점 중..."):
             try:
                 st.session_state.user_answer = user_input.strip()
-                st.session_state.feedback = get_feedback(client, korean, user_input.strip())
+                st.session_state.feedback = get_feedback(korean, user_input.strip())
             except Exception as e:
                 st.error(f"🚨 {e}")
                 st.code(traceback.format_exc())
@@ -485,7 +475,7 @@ if st.session_state.answered:
                 flush_history_to_db()
             with st.spinner("새 문장 생성 중..."):
                 try:
-                    new_sentence = generate_one_sentence(client)
+                    new_sentence = generate_one_sentence()
                 except Exception as e:
                     st.error(f"🚨 {e}")
                     st.code(traceback.format_exc())
