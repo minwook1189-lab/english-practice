@@ -141,9 +141,20 @@ def delete_history_item(item_id: int):
 
 # ── Groq API ──────────────────────────────────────────────
 def get_client():
-    api_key = os.environ.get("GROQ_API_KEY")
+    api_key = os.environ.get("GROQ_API_KEY", "")
     if not api_key:
         st.error("❌ GROQ_API_KEY 환경변수가 없습니다. https://console.groq.com 에서 무료로 발급받으세요.")
+        st.stop()
+    try:
+        api_key.encode("ascii")
+    except UnicodeEncodeError:
+        st.error(
+            "❌ GROQ_API_KEY가 올바르지 않습니다. "
+            "API 키에 한글 등 비ASCII 문자가 포함되어 있어요.\n\n"
+            f"현재 GROQ_API_KEY 앞 10자: `{api_key[:10]}`\n\n"
+            "Groq 콘솔(https://console.groq.com)에서 API 키를 다시 확인해서 "
+            "Streamlit Cloud Secrets 또는 .bat 파일을 수정해주세요."
+        )
         st.stop()
     return Groq(api_key=api_key)
 
